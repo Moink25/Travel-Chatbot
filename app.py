@@ -211,7 +211,7 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
         return html_content
 
 llm=HuggingFaceEndpoint(
-    repo_id="meta-llama/Llama-3.1-8B-Instruct",
+    repo_id="google/gemma-2-2b-it",
     task="text-generation"
 )
 
