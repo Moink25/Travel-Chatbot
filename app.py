@@ -211,7 +211,7 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
         return html_content
 
 llm=HuggingFaceEndpoint(
-    repo_id="mistralai/Mistral-7B-Instruct-v0.3",
+    repo_id="Qwen/Qwen2.5-7B-Instruct",
     task="text-generation"
 )
 
