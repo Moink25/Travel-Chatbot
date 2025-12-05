@@ -1,5 +1,5 @@
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_huggingface import HuggingFaceEndpoint
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from dotenv import load_dotenv
 import streamlit as st
 from models.itinerary import Itinerary
@@ -231,14 +231,14 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
 # -----------------------
 # LLM + ChatPromptTemplate Section (Mistral conversational)
 # -----------------------
-
-model = HuggingFaceEndpoint(
+llm = HuggingFaceEndpoint(
     repo_id="Qwen/Qwen2.5-7B-Instruct",
     task="text-generation",
     max_new_tokens=700,
     temperature=0.7
 )
 
+model = ChatHuggingFace(llm=llm)
 # Main itinerary ChatPrompt: system + user message (user message contains placeholders)
 itinerary_prompt = ChatPromptTemplate.from_messages(
     [
