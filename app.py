@@ -1,4 +1,4 @@
-from langchain_core.prompts import load_prompt, PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_huggingface import HuggingFaceEndpoint
 from dotenv import load_dotenv
 import streamlit as st
@@ -21,29 +21,23 @@ import uuid
 import html
 import os
 
-# Helpful: ensure your HF token (if required) is set in env or .env
-# load_dotenv() will pick it up if present
+# Load environment variables (HUGGINGFACEHUB_API_TOKEN if present)
 load_dotenv()
-# os.environ["HUGGINGFACEHUB_API_TOKEN"] = "<your_token_here>"  # optional
+# Optionally set token programmatically:
+# os.environ["HUGGINGFACEHUB_API_TOKEN"] = "<your_token_here>"
 
 def safe_rerun():
-    """Attempt to rerun the Streamlit script. If the runtime doesn't expose experimental_rerun,
-    fall back to changing query params (which triggers a rerun) and stopping the script.
-    This avoids AttributeError on older/newer Streamlit builds."""
+    """Attempt to rerun the Streamlit script in a robust way across Streamlit versions."""
     try:
-        # Preferred method when available
         if hasattr(st, "experimental_rerun"):
             st.experimental_rerun()
             return
     except Exception:
         pass
     try:
-        # Changing query params causes a rerun in Streamlit
         st.experimental_set_query_params(_refresh=str(uuid.uuid4()))
     except Exception:
-        # Last resort: ask the user to manually refresh
         st.warning("Please refresh the page to see the updated data.")
-    # Stop the current run (Streamlit will re-run due to query param change)
     try:
         st.stop()
     except Exception:
@@ -62,7 +56,6 @@ init_db()
 
 def get_city_image(destination):
     try:
-        # Try Wikipedia first
         response = requests.get(
             f"https://en.wikipedia.org/api/rest_v1/page/summary/{destination.replace(' ', '_')}",
             timeout=5,
@@ -76,7 +69,6 @@ def get_city_image(destination):
         pass
 
     try:
-        # Use Pexels free image API for city photos
         pexels_api_key = "563492ad6f91700001000001"  # Public demo key
         response = requests.get(
             f"https://api.pexels.com/v1/search?query={destination}&per_page=1",
@@ -90,20 +82,15 @@ def get_city_image(destination):
     except Exception:
         pass
 
-    # Fallback: Use a consistent image based on destination
     return f"https://picsum.photos/400/200?random={hash(destination) % 1000}"
 
 
 def get_city_images(destination, n=3):
-    """Return up to n distinct image URLs for a destination.
-    Strategy: Wikipedia summary thumbnail, Wikimedia page images, Pexels fallback, then picsum placeholders.
-    """
     urls = []
     dest = destination.strip() if destination else ""
     if not dest:
         return [f"https://picsum.photos/400/200?random={i}" for i in range(n)]
 
-    # 1) Wikipedia summary thumbnail
     try:
         resp = requests.get(
             f"https://en.wikipedia.org/api/rest_v1/page/summary/{dest.replace(' ', '_')}",
@@ -117,7 +104,6 @@ def get_city_images(destination, n=3):
     except Exception:
         pass
 
-    # 2) Wikimedia API: search for page then collect images from page
     try:
         s = requests.get(
             "https://en.wikipedia.org/w/api.php",
@@ -139,7 +125,6 @@ def get_city_images(destination, n=3):
                     t = im.get("title", "")
                     if t.lower().endswith((".jpg", ".jpeg", ".png", ".svg")):
                         image_titles.append(t)
-            # fetch imageinfo urls
             for it in image_titles:
                 if len(urls) >= n:
                     break
@@ -162,7 +147,6 @@ def get_city_images(destination, n=3):
     except Exception:
         pass
 
-    # 3) Unsplash Source fallback (no API key) - fetch images related to the place
     try:
         from urllib.parse import quote_plus
 
@@ -172,7 +156,6 @@ def get_city_images(destination, n=3):
             if len(urls) >= n:
                 break
             qenc = quote_plus(q)
-            # Use source.unsplash.com which redirects to a relevant image without API key
             img_url = f"https://source.unsplash.com/800x600/?{qenc}&sig={abs(hash(dest+q))%10000}"
             if img_url not in urls:
                 urls.append(img_url)
@@ -180,7 +163,6 @@ def get_city_images(destination, n=3):
     except Exception:
         pass
 
-    # Simple caching via streamlit session to avoid repeated lookups (keeps URLs only)
     try:
         key = f"_img_cache_{dest.lower()}_{n}"
         if "img_cache" not in st.session_state:
@@ -189,7 +171,6 @@ def get_city_images(destination, n=3):
     except Exception:
         pass
 
-    # 4) Fallback to picsum placeholders for remaining slots
     i = 0
     while len(urls) < n:
         urls.append(f"https://picsum.photos/600/400?random={abs(hash(dest + str(i))) % 10000}")
@@ -199,12 +180,10 @@ def get_city_images(destination, n=3):
 
 
 def render_carousel(img_urls, captions=None, uid=None, height=320):
-    """Return HTML for a simple carousel. Use a uid to avoid duplicate element IDs."""
     if uid is None:
         uid = str(uuid.uuid4()).replace("-", "")
     if captions is None:
         captions = [""] * len(img_urls)
-    # Escape urls and captions
     esc_urls = [html.escape(u) for u in img_urls]
     esc_caps = [html.escape(c) for c in captions]
     slides = "\n".join(
@@ -250,30 +229,23 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
 
 
 # -----------------------
-# LLM + Template Section
+# LLM + ChatPromptTemplate Section (Mistral conversational)
 # -----------------------
 
-# Use Mistral Instruct model (recommended)
 model = HuggingFaceEndpoint(
     repo_id="mistralai/Mistral-7B-Instruct-v0.3",
-    task="conversational",
+    task="conversational",  # must be 'conversational' for together provider
     max_new_tokens=700,
     temperature=0.7,
 )
 
-template = PromptTemplate(
-    input_variables=[
-        "destination",
-        "duration_days",
-        "budget",
-        "preferences",
-        "user_questions",
-        "user_name",
-        "num_people",
-    ],
-    template="""You are a highly intelligent, friendly and detail-oriented Travel Planner AI. Your job is to create a tailor-made travel itinerary based on the user’s inputs, and to answer follow-up questions about that itinerary.
-
-User Inputs:
+# Main itinerary ChatPrompt: system + user message (user message contains placeholders)
+itinerary_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a highly intelligent, friendly and detail-oriented Travel Planner AI. Your job is to produce a clear, day-by-day itinerary and answer follow-up questions based on the itinerary."),
+        (
+            "user",
+            """User Inputs:
 - Name: {user_name}
 - Destination: {destination}
 - Duration: {duration_days} days
@@ -283,49 +255,75 @@ User Inputs:
 - Additional Questions: {user_questions} (if any)
 
 Your tasks:
-1. First, greet the user by name, e.g. "Hello {user_name}!".
-
-2. Generate a day-by-day itinerary for the duration specified. For each day include:
+1. Greet the user by name (e.g., "Hello {user_name}!").
+2. Generate a day-by-day itinerary for the specified duration. For each day include:
    - Morning activity with estimated cost
    - Afternoon activity with estimated cost
    - Evening activity with estimated cost
    - Recommended restaurant or local cuisine suggestion with estimated cost
    - Accommodation tip (optional) with estimated cost if applicable
    - Travel/transport tip or local insight or cost-saving suggestion
+3. Ensure the total estimated cost across all days fits strictly within the provided budget in INR. Distribute the budget logically. All costs must be in INR and the total must not exceed the budget.
+4. If the user asked follow-up question(s) in {user_questions}, answer them at the end.
+5. After the itinerary, provide a short 'Tips' section with practical advice.
+6. At the end, provide a 'Total Estimated Cost' section with the grand total in INR, confirming it is within the budget.
+7. Format the output clearly with headings for each Day (Day 1, Day 2…), bullet points for activities, and a clear 'Tips' section at the end.
 
-3. Ensure the total estimated cost across all days fits strictly within the provided budget in INR. Distribute the budget logically (e.g., more on activities, less on transport if needed). All costs must be in INR and the total must not exceed the budget.
-
-4. If the user asked any follow-up question(s) in {user_questions}, answer them at the end.
-
-5. After the itinerary, provide a short "Tips" section with practical advice (e.g., local customs, best transport mode, packing, best time of day to visit major spots).
-
-6. At the end, provide a "Total Estimated Cost" section with the grand total in INR, confirming it is within the budget.
-
-7. Format your output clearly with headings for each Day (Day 1, Day 2…), bullet points for activities, and a clear "Tips" section at the end.
-
-Example:
+Example (format style):
 
 Day 1:
 - Morning: Visit the historic city centre (free walking tour) - ₹0
-- Afternoon: Lunch at Café de Flore - ₹2000. Then explore the Louvre - ₹1500.
-- Evening: Seine river cruise at sunset - ₹1000.
-- Restaurant suggestion: Le Comptoir du Relais (moderate budget) - ₹2500.
-- Accommodation tip: Stay near Saint-Germain for easy transport - ₹3000 per night.
-
-Day 2:
-- Morning: Bike ride through the Bois de Boulogne - ₹500.
-- Afternoon: Musée d'Orsay visit - ₹1200.
-- Evening: Dinner at local bistro - ₹1800…
+- Afternoon: Lunch at a local cafe - ₹2000. Explore a museum - ₹1500.
+- Evening: River cruise - ₹1000.
+- Restaurant suggestion: Local bistro - ₹2500.
+- Accommodation tip: Stay near the central district - ₹3000 per night.
 
 Tips:
-- Use the métro instead of taxis to save budget.
-- Many museums are free on the first Sunday of the month.
-- Always carry a refillable water bottle.
+- Use public transport to save money.
+- Carry a refillable water bottle.
 
-Total Estimated Cost: ₹45000 (within budget)
+Total Estimated Cost: ₹XXXXX (within budget)
 
-Please give the itinerary in a single response, ready to show in a web app.
-""",
+Please give the itinerary in a single response, ready to show in a web app."""
+        ),
+    ]
+)
+
+# Flight search prompt (chat-style)
+flight_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a helpful travel assistant."),
+        (
+            "user",
+            """Provide the top 3 flight options from {origin} to {destination}. For each option give: airline, approximate price in INR, total duration, number of stops, and a short note about convenience (best times to fly or layovers). Provide suggested search terms to use on flight booking sites.
+
+Output format:
+1) Airline — Price — Duration — Stops — Note
+2) ...
+3) ...""",
+        ),
+    ]
+)
+
+# Chat-with-itinerary prompt
+chat_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a helpful and accurate travel assistant. Use the itinerary and conversation history to answer questions succinctly."),
+        (
+            "user",
+            """Itinerary:
+
+{itinerary}
+
+Conversation History:
+
+{history}
+
+User: {question}
+
+Assistant:""",
+        ),
+    ]
 )
 
 
@@ -335,7 +333,8 @@ Please give the itinerary in a single response, ready to show in a web app.
 
 if "user_id" not in st.session_state:
     st.title("🔐 Login to AI Travel Itinerary Planner")
-    st.image("https://picsum.photos/800/200", use_container_width=True)
+    # update per deprecation: width='stretch' instead of use_container_width
+    st.image("https://picsum.photos/800/200", width="stretch")
     tab1, tab2 = st.tabs(["Login", "Register"])
     with tab1:
         username = st.text_input("Username", key="login_username")
@@ -363,10 +362,8 @@ if "user_id" not in st.session_state:
                 st.error("Please fill all fields.")
 else:
     theme = "Dark"
-    # Global styles
     bg_color = "#121212"
     text_color = "#e0e0e0"
-    sidebar_bg = "#1e1e1e"
     input_bg = "#2c2c2c"
     button_bg = "linear-gradient(135deg, #bb86fc 0%, #6200ea 100%)"
 
@@ -384,7 +381,6 @@ else:
     .stApp {{
         background-color: {bg_color} !important;
     }}
-    /* Sidebar removed - using a top-row logout button instead */
     .stTextInput input, .stTextArea textarea, .stSelectbox select {{
         background-color: {input_bg} !important;
         color: {text_color} !important;
@@ -420,7 +416,7 @@ else:
     """,
         unsafe_allow_html=True,
     )
-    # Top-row welcome + logout (replace previous sidebar logout)
+
     col_welcome, col_logout = st.columns([9, 1])
     with col_welcome:
         st.markdown(f"**Welcome, {st.session_state['username']}**")
@@ -432,12 +428,11 @@ else:
 
     user_id = st.session_state["user_id"]
 
-    # Top-level tabs for main pages (replaces the old sidebar page selector)
     tab_gen, tab_dash = st.tabs(["Generate Itinerary", "Dashboard"])
 
     with tab_gen:
         st.title("🌍 Generate Your Travel Itinerary")
-        st.image("https://picsum.photos/800/150", use_container_width=True)
+        st.image("https://picsum.photos/800/150", width="stretch")
         with st.form("itinerary_form"):
             col1, col2 = st.columns(2)
             with col1:
@@ -455,7 +450,7 @@ else:
                     st.error("Please fill in Destination and Your Name.")
                 else:
                     with st.spinner("Generating your itinerary..."):
-                        chain = template | model
+                        chain = itinerary_prompt | model
                         result = chain.invoke(
                             {
                                 "destination": destination,
@@ -467,7 +462,6 @@ else:
                                 "num_people": num_people,
                             }
                         )
-                        # HuggingFaceEndpoint returns plain string
                         itinerary_text = result.strip() if isinstance(result, str) else str(result)
                         st.session_state["generated_itinerary"] = itinerary_text
                         st.session_state["itinerary_details"] = {
@@ -488,7 +482,6 @@ else:
             is_public = st.checkbox("Make this itinerary public (visible to others)", value=False)
             if st.button("Save Itinerary", key="save_itinerary_gen"):
                 if itinerary_name:
-                    # Ensure num_people is preserved when saving (fixes the None display)
                     itinerary = Itinerary(
                         name=itinerary_name,
                         content=st.session_state["generated_itinerary"],
@@ -510,7 +503,7 @@ else:
 
     with tab_dash:
         st.title("📊 Your Dashboard")
-        st.image("https://picsum.photos/800/150", use_container_width=True)
+        st.image("https://picsum.photos/800/150", width="stretch")
         tab1, tab2 = st.tabs(["My Itineraries", "Public Itineraries"])
 
         with tab1:
@@ -526,7 +519,6 @@ else:
                 with col1:
                     st.subheader(f"📍 {selected_it.name}")
                     st.markdown("---")
-                    # Animated header
                     card_bg = "linear-gradient(135deg, #1e1e1e 0%, #2c2c2c 100%)"
                     st.markdown(
                         f"""
@@ -565,7 +557,6 @@ else:
                     st.markdown("---")
                     display_itinerary(selected_it.content, theme)
 
-                    # Chat animations
                     chat_bg = "#2c2c2c"
                     chat_border = "#555"
                     st.markdown(
@@ -594,12 +585,10 @@ else:
                     st.write(f"Destination: {selected_it.destination}")
                     st.write(f"Duration: {selected_it.duration} days")
                     st.write(f"Budget: {selected_it.budget}")
-                    # Avoid showing 'None' by providing a sensible default display
                     people_display = selected_it.num_people if (selected_it.num_people is not None) else "1"
                     st.write(f"Number of People: {people_display}")
                     st.write(f"Preferences: {selected_it.preferences}")
 
-                    # Image gallery: destination-specific photos (from Wikimedia/Pexels fallbacks)
                     img_urls = get_city_images(selected_it.destination, n=3)
                     st.markdown("**Photos:**")
                     carousel_html = render_carousel(
@@ -610,19 +599,11 @@ else:
                     )
                     components.html(carousel_html, height=280)
 
-                    # Flight search UI (My Itineraries)
                     st.markdown("**Find best flights to this destination**")
                     dep_city = st.text_input("Your departure city (e.g., Mumbai)", value="", key=f"dep_my_{selected_it.id}")
                     if st.button("Find Best Flights", key=f"find_flights_my_{selected_it.id}"):
                         origin = dep_city.strip() or "Your nearest major airport"
-                        flight_template = PromptTemplate(
-                            input_variables=["origin", "destination"],
-                            template="""You are a helpful travel assistant. Provide the top 3 flight options from {origin} to {destination}. For each option give: airline, approximate price, total duration, number of stops, and a short note about convenience (best times to fly or layovers). Provide prices in INR if possible and include suggested search terms to use on flight booking sites.
-
-Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3) ...
-""",
-                        )
-                        flight_chain = flight_template | model
+                        flight_chain = flight_prompt | model
                         with st.spinner("Looking up best flight options (using the assistant)..."):
                             flight_resp = flight_chain.invoke({"origin": origin, "destination": selected_it.destination})
                             flight_resp_text = flight_resp.strip() if isinstance(flight_resp, str) else str(flight_resp)
@@ -641,39 +622,16 @@ Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3)
                         st.write(prompt)
                     save_chat_message(selected_it.id, "user", prompt)
 
-                    # Get updated history
                     chat_history = get_chat_history(selected_it.id)
-                    history_text = "\n".join(
-                        [f"{msg['role'].capitalize()}: {msg['content']}" for msg in chat_history[:-1]]
-                    )  # Exclude the latest user message
+                    history_text = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in chat_history[:-1]])
 
-                    # AI Response
-                    chat_template = PromptTemplate(
-                        input_variables=["itinerary", "history", "question"],
-                        template="""You are a helpful and accurate travel assistant. Based on the provided itinerary, answer the user's question helpfully, drawing from the itinerary details and conversation history. Provide concise, accurate responses. Format your answers clearly using bullet points, numbered lists, or sections where appropriate for better readability.
-
-Itinerary:
-
-{itinerary}
-
-Conversation History:
-
-{history}
-
-User: {question}
-
-Assistant:""",
-                    )
-                    chat_chain = chat_template | model
-                    chat_resp = chat_chain.invoke(
-                        {"itinerary": selected_it.content, "history": history_text, "question": prompt}
-                    )
+                    chat_chain = chat_prompt | model
+                    chat_resp = chat_chain.invoke({"itinerary": selected_it.content, "history": history_text, "question": prompt})
                     response_text = chat_resp.strip() if isinstance(chat_resp, str) else str(chat_resp)
 
                     with st.chat_message("assistant"):
                         st.write(response_text)
                     save_chat_message(selected_it.id, "assistant", response_text)
-                    # (Duplicate display block removed to avoid rendering the itinerary twice)
 
         with tab2:
             st.subheader("🌐 Public Itineraries")
@@ -713,7 +671,6 @@ Assistant:""",
                     st.write(f"Preferences: {selected_pub.preferences}")
                     st.write(f"Shared by: {selected_pub.user_name}")
 
-                    # Destination-specific images
                     img_urls_pub = get_city_images(selected_pub.destination, n=3)
                     st.markdown("**Photos:**")
                     carousel_html_pub = render_carousel(
@@ -724,26 +681,17 @@ Assistant:""",
                     )
                     components.html(carousel_html_pub, height=280)
 
-                    # Flight search UI (Public Itineraries)
                     st.markdown("**Find best flights to this destination**")
                     dep_city_pub = st.text_input("Your departure city (e.g., Delhi)", value="", key=f"dep_pub_{selected_pub.id}")
                     if st.button("Find Best Flights", key=f"find_flights_pub_{selected_pub.id}"):
                         origin = dep_city_pub.strip() or "Your nearest major airport"
-                        flight_template = PromptTemplate(
-                            input_variables=["origin", "destination"],
-                            template="""You are a helpful travel assistant. Provide the top 3 flight options from {origin} to {destination}. For each option give: airline, approximate price, total duration, number of stops, and a short note about convenience (best times to fly or layovers). Provide prices in INR if possible and include suggested search terms to use on flight booking sites.
-
-Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3) ...
-""",
-                        )
-                        flight_chain = flight_template | model
+                        flight_chain = flight_prompt | model
                         with st.spinner("Looking up best flight options (using the assistant)..."):
                             flight_resp = flight_chain.invoke({"origin": origin, "destination": selected_pub.destination})
                             flight_resp_text = flight_resp.strip() if isinstance(flight_resp, str) else str(flight_resp)
                         st.markdown("**Best Flights (estimated)**")
                         st.info(flight_resp_text)
 
-                    # Save a public itinerary copy to the current user's account
                     st.markdown("**Save a copy to your account:**")
                     new_name_public = st.text_input("New Name for Your Copy", placeholder="e.g., My Paris Trip", key="save_pub_name_public")
                     if st.button("Save to My Itineraries", key="save_to_my_from_public"):
@@ -761,7 +709,6 @@ Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3)
                             )
                             save_itinerary(private_itinerary, user_id)
                             st.success("Itinerary saved to your private collection! You can now chat with it in 'My Itineraries'.")
-                            # Refresh the app so the 'My Itineraries' tab shows the newly saved itinerary
                             safe_rerun()
                         else:
                             st.error("Please enter a name for your copy.")
