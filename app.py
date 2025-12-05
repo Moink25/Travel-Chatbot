@@ -211,8 +211,8 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
         return html_content
 
 model = HuggingFaceEndpoint(
-    repo_id="google/gemma-2-2b-it",
-    task="coversational",
+    repo_id="Qwen/Qwen3-4B-Instruct-2507",
+    task="text-generation",
     max_new_tokens=300,
     temperature=0.7
 )
