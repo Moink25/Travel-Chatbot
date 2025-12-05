@@ -212,7 +212,7 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
 
 model = HuggingFaceEndpoint(
     repo_id="google/gemma-2-2b-it",
-    task="text-generation",
+    task="coversational",
     max_new_tokens=300,
     temperature=0.7
 )
