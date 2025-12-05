@@ -1,17 +1,30 @@
 from langchain_core.prompts import load_prompt, PromptTemplate
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+from langchain_huggingface import HuggingFaceEndpoint
 from dotenv import load_dotenv
 import streamlit as st
 from models.itinerary import Itinerary
 from utils.parsing import display_itinerary
-from database.db import init_db, create_user, authenticate_user, save_itinerary, get_itineraries, get_public_itineraries, save_chat_message, get_chat_history
+from database.db import (
+    init_db,
+    create_user,
+    authenticate_user,
+    save_itinerary,
+    get_itineraries,
+    get_public_itineraries,
+    save_chat_message,
+    get_chat_history,
+)
 import hashlib
-import requests
 import requests
 import streamlit.components.v1 as components
 import uuid
 import html
+import os
 
+# Helpful: ensure your HF token (if required) is set in env or .env
+# load_dotenv() will pick it up if present
+load_dotenv()
+# os.environ["HUGGINGFACEHUB_API_TOKEN"] = "<your_token_here>"  # optional
 
 def safe_rerun():
     """Attempt to rerun the Streamlit script. If the runtime doesn't expose experimental_rerun,
@@ -19,7 +32,7 @@ def safe_rerun():
     This avoids AttributeError on older/newer Streamlit builds."""
     try:
         # Preferred method when available
-        if hasattr(st, 'experimental_rerun'):
+        if hasattr(st, "experimental_rerun"):
             st.experimental_rerun()
             return
     except Exception:
@@ -36,35 +49,47 @@ def safe_rerun():
     except Exception:
         return
 
-st.set_page_config(page_title="AI Travel Itinerary Planner", page_icon="🌍", layout="wide", initial_sidebar_state="expanded")
 
-load_dotenv()
+st.set_page_config(
+    page_title="AI Travel Itinerary Planner",
+    page_icon="🌍",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 init_db()
+
 
 def get_city_image(destination):
     try:
         # Try Wikipedia first
-        response = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{destination.replace(' ', '_')}", timeout=5)
+        response = requests.get(
+            f"https://en.wikipedia.org/api/rest_v1/page/summary/{destination.replace(' ', '_')}",
+            timeout=5,
+        )
         if response.status_code == 200:
             data = response.json()
-            thumbnail = data.get('thumbnail', {}).get('source')
+            thumbnail = data.get("thumbnail", {}).get("source")
             if thumbnail:
                 return thumbnail
-    except:
+    except Exception:
         pass
-    
+
     try:
         # Use Pexels free image API for city photos
         pexels_api_key = "563492ad6f91700001000001"  # Public demo key
-        response = requests.get(f"https://api.pexels.com/v1/search?query={destination}&per_page=1", 
-                                headers={"Authorization": pexels_api_key}, timeout=5)
+        response = requests.get(
+            f"https://api.pexels.com/v1/search?query={destination}&per_page=1",
+            headers={"Authorization": pexels_api_key},
+            timeout=5,
+        )
         if response.status_code == 200:
             data = response.json()
-            if data.get('photos'):
-                return data['photos'][0]['src']['medium']
-    except:
+            if data.get("photos"):
+                return data["photos"][0]["src"]["medium"]
+    except Exception:
         pass
-    
+
     # Fallback: Use a consistent image based on destination
     return f"https://picsum.photos/400/200?random={hash(destination) % 1000}"
 
@@ -74,16 +99,19 @@ def get_city_images(destination, n=3):
     Strategy: Wikipedia summary thumbnail, Wikimedia page images, Pexels fallback, then picsum placeholders.
     """
     urls = []
-    dest = destination.strip() if destination else ''
+    dest = destination.strip() if destination else ""
     if not dest:
         return [f"https://picsum.photos/400/200?random={i}" for i in range(n)]
 
     # 1) Wikipedia summary thumbnail
     try:
-        resp = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{dest.replace(' ', '_')}", timeout=5)
+        resp = requests.get(
+            f"https://en.wikipedia.org/api/rest_v1/page/summary/{dest.replace(' ', '_')}",
+            timeout=5,
+        )
         if resp.status_code == 200:
             data = resp.json()
-            thumb = data.get('thumbnail', {}).get('source')
+            thumb = data.get("thumbnail", {}).get("source")
             if thumb and thumb not in urls:
                 urls.append(thumb)
     except Exception:
@@ -91,35 +119,41 @@ def get_city_images(destination, n=3):
 
     # 2) Wikimedia API: search for page then collect images from page
     try:
-        s = requests.get('https://en.wikipedia.org/w/api.php', params={
-            'action': 'query', 'list': 'search', 'srsearch': dest, 'format': 'json', 'srlimit': 1
-        }, timeout=5).json()
-        top = s.get('query', {}).get('search', [])
+        s = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "query", "list": "search", "srsearch": dest, "format": "json", "srlimit": 1},
+            timeout=5,
+        ).json()
+        top = s.get("query", {}).get("search", [])
         if top:
-            title = top[0].get('title')
-            imgs = requests.get('https://en.wikipedia.org/w/api.php', params={
-                'action': 'query', 'titles': title, 'prop': 'images', 'format': 'json', 'imlimit': 'max'
-            }, timeout=5).json()
-            pages = imgs.get('query', {}).get('pages', {})
+            title = top[0].get("title")
+            imgs = requests.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={"action": "query", "titles": title, "prop": "images", "format": "json", "imlimit": "max"},
+                timeout=5,
+            ).json()
+            pages = imgs.get("query", {}).get("pages", {})
             image_titles = []
             for p in pages.values():
-                for im in p.get('images', [])[:20]:
-                    t = im.get('title', '')
-                    if t.lower().endswith(('.jpg', '.jpeg', '.png', '.svg')):
+                for im in p.get("images", [])[:20]:
+                    t = im.get("title", "")
+                    if t.lower().endswith((".jpg", ".jpeg", ".png", ".svg")):
                         image_titles.append(t)
             # fetch imageinfo urls
             for it in image_titles:
                 if len(urls) >= n:
                     break
                 try:
-                    info = requests.get('https://en.wikipedia.org/w/api.php', params={
-                        'action': 'query', 'titles': it, 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'
-                    }, timeout=5).json()
-                    pages2 = info.get('query', {}).get('pages', {})
+                    info = requests.get(
+                        "https://en.wikipedia.org/w/api.php",
+                        params={"action": "query", "titles": it, "prop": "imageinfo", "iiprop": "url", "format": "json"},
+                        timeout=5,
+                    ).json()
+                    pages2 = info.get("query", {}).get("pages", {})
                     for p2 in pages2.values():
-                        ii = p2.get('imageinfo', [])
+                        ii = p2.get("imageinfo", [])
                         if ii:
-                            url = ii[0].get('url')
+                            url = ii[0].get("url")
                             if url and url not in urls:
                                 urls.append(url)
                                 break
@@ -131,6 +165,7 @@ def get_city_images(destination, n=3):
     # 3) Unsplash Source fallback (no API key) - fetch images related to the place
     try:
         from urllib.parse import quote_plus
+
         queries = [dest, f"{dest} city", f"{dest} landmark", f"{dest} skyline", f"{dest} aerial"]
         i = 0
         for q in queries:
@@ -148,9 +183,9 @@ def get_city_images(destination, n=3):
     # Simple caching via streamlit session to avoid repeated lookups (keeps URLs only)
     try:
         key = f"_img_cache_{dest.lower()}_{n}"
-        if 'img_cache' not in st.session_state:
-            st.session_state['img_cache'] = {}
-        st.session_state['img_cache'][key] = urls[:n]
+        if "img_cache" not in st.session_state:
+            st.session_state["img_cache"] = {}
+        st.session_state["img_cache"][key] = urls[:n]
     except Exception:
         pass
 
@@ -164,17 +199,20 @@ def get_city_images(destination, n=3):
 
 
 def render_carousel(img_urls, captions=None, uid=None, height=320):
-        """Return HTML for a simple carousel. Use a uid to avoid duplicate element IDs."""
-        if uid is None:
-                uid = str(uuid.uuid4()).replace('-', '')
-        if captions is None:
-                captions = [''] * len(img_urls)
-        # Escape urls and captions
-        esc_urls = [html.escape(u) for u in img_urls]
-        esc_caps = [html.escape(c) for c in captions]
-        slides = "\n".join(f"<div class=\"carousel-slide\" data-index=\"{i}\">\n<img src=\"{esc_urls[i]}\" style=\"width:100%;height:100%;object-fit:cover;border-radius:10px;\">\n<div class=\"carousel-caption\">{esc_caps[i]}</div>\n</div>" for i in range(len(esc_urls)))
+    """Return HTML for a simple carousel. Use a uid to avoid duplicate element IDs."""
+    if uid is None:
+        uid = str(uuid.uuid4()).replace("-", "")
+    if captions is None:
+        captions = [""] * len(img_urls)
+    # Escape urls and captions
+    esc_urls = [html.escape(u) for u in img_urls]
+    esc_caps = [html.escape(c) for c in captions]
+    slides = "\n".join(
+        f"<div class=\"carousel-slide\" data-index=\"{i}\">\n<img src=\"{esc_urls[i]}\" style=\"width:100%;height:100%;object-fit:cover;border-radius:10px;\">\n<div class=\"carousel-caption\">{esc_caps[i]}</div>\n</div>"
+        for i in range(len(esc_urls))
+    )
 
-        html_content = f"""
+    html_content = f"""
         <div id="carousel-{uid}" class="carousel-container" style="width:100%;height:{height}px;position:relative;">
             <style>
                 .carousel-slide {{ display:none; width:100%; height:100%; }}
@@ -208,18 +246,32 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
         }})();
         </script>
         """
-        return html_content
+    return html_content
 
+
+# -----------------------
+# LLM + Template Section
+# -----------------------
+
+# Use Mistral Instruct model (recommended)
 model = HuggingFaceEndpoint(
-    repo_id="Qwen/Qwen3-4B-Instruct-2507",
+    repo_id="mistralai/Mistral-7B-Instruct-v0.3",
     task="text-generation",
-    max_new_tokens=300,
-    temperature=0.7
+    max_new_tokens=700,
+    temperature=0.7,
 )
 
-template= PromptTemplate(
-    input_variables=["destination", "duration_days", "budget", "preferences", "user_questions", "user_name", "num_people"],
-    template='''You are a highly intelligent, friendly and detail-oriented Travel Planner AI. Your job is to create a tailor-made travel itinerary based on the user’s inputs, and to answer follow-up questions about that itinerary.
+template = PromptTemplate(
+    input_variables=[
+        "destination",
+        "duration_days",
+        "budget",
+        "preferences",
+        "user_questions",
+        "user_name",
+        "num_people",
+    ],
+    template="""You are a highly intelligent, friendly and detail-oriented Travel Planner AI. Your job is to create a tailor-made travel itinerary based on the user’s inputs, and to answer follow-up questions about that itinerary.
 
 User Inputs:
 - Name: {user_name}
@@ -273,10 +325,15 @@ Tips:
 Total Estimated Cost: ₹45000 (within budget)
 
 Please give the itinerary in a single response, ready to show in a web app.
-''')
+""",
+)
 
 
-if 'user_id' not in st.session_state:
+# -----------------------
+# Streamlit App UI
+# -----------------------
+
+if "user_id" not in st.session_state:
     st.title("🔐 Login to AI Travel Itinerary Planner")
     st.image("https://picsum.photos/800/200", use_container_width=True)
     tab1, tab2 = st.tabs(["Login", "Register"])
@@ -286,8 +343,8 @@ if 'user_id' not in st.session_state:
         if st.button("Login"):
             user_id = authenticate_user(username, password)
             if user_id:
-                st.session_state['user_id'] = user_id
-                st.session_state['username'] = username
+                st.session_state["user_id"] = user_id
+                st.session_state["username"] = username
                 st.success("Logged in successfully!")
                 st.rerun()
             else:
@@ -305,15 +362,16 @@ if 'user_id' not in st.session_state:
             else:
                 st.error("Please fill all fields.")
 else:
-    theme = 'Dark'
+    theme = "Dark"
     # Global styles
-    bg_color = '#121212'
-    text_color = '#e0e0e0'
-    sidebar_bg = '#1e1e1e'
-    input_bg = '#2c2c2c'
-    button_bg = 'linear-gradient(135deg, #bb86fc 0%, #6200ea 100%)'
-    
-    st.markdown(f"""
+    bg_color = "#121212"
+    text_color = "#e0e0e0"
+    sidebar_bg = "#1e1e1e"
+    input_bg = "#2c2c2c"
+    button_bg = "linear-gradient(135deg, #bb86fc 0%, #6200ea 100%)"
+
+    st.markdown(
+        f"""
     <style>
     * {{
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
@@ -359,21 +417,23 @@ else:
         padding: 16px !important;
     }}
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
     # Top-row welcome + logout (replace previous sidebar logout)
     col_welcome, col_logout = st.columns([9, 1])
     with col_welcome:
         st.markdown(f"**Welcome, {st.session_state['username']}**")
     with col_logout:
         if st.button("Logout", key="logout_main"):
-            st.session_state.pop('user_id', None)
-            st.session_state.pop('username', None)
+            st.session_state.pop("user_id", None)
+            st.session_state.pop("username", None)
             st.rerun()
 
-    user_id = st.session_state['user_id']
+    user_id = st.session_state["user_id"]
 
     # Top-level tabs for main pages (replaces the old sidebar page selector)
-    tab_gen, tab_dash = st.tabs(["Generate Itinerary", "Dashboard"]) 
+    tab_gen, tab_dash = st.tabs(["Generate Itinerary", "Dashboard"])
 
     with tab_gen:
         st.title("🌍 Generate Your Travel Itinerary")
@@ -396,30 +456,34 @@ else:
                 else:
                     with st.spinner("Generating your itinerary..."):
                         chain = template | model
-                        result = chain.invoke({
-                            'destination': destination,
-                            'duration_days': duration_days,
-                            'budget': budget,
-                            'preferences': preferences,
-                            'user_questions': user_questions,
-                            'user_name': user_name,
-                            'num_people': num_people
-                        })
-                        st.session_state['generated_itinerary'] = result.content
-                        st.session_state['itinerary_details'] = {
-                            'destination': destination,
-                            'duration': duration_days,
-                            'budget': budget,
-                            'preferences': preferences,
-                            'user_name': user_name,
-                            'num_people': num_people
+                        result = chain.invoke(
+                            {
+                                "destination": destination,
+                                "duration_days": duration_days,
+                                "budget": budget,
+                                "preferences": preferences,
+                                "user_questions": user_questions,
+                                "user_name": user_name,
+                                "num_people": num_people,
+                            }
+                        )
+                        # HuggingFaceEndpoint returns plain string
+                        itinerary_text = result.strip() if isinstance(result, str) else str(result)
+                        st.session_state["generated_itinerary"] = itinerary_text
+                        st.session_state["itinerary_details"] = {
+                            "destination": destination,
+                            "duration": duration_days,
+                            "budget": budget,
+                            "preferences": preferences,
+                            "user_name": user_name,
+                            "num_people": num_people,
                         }
                         st.success("Itinerary generated!")
                         st.balloons()
-        
-        if 'generated_itinerary' in st.session_state:
+
+        if "generated_itinerary" in st.session_state:
             st.subheader("📅 Your Generated Itinerary")
-            display_itinerary(st.session_state['generated_itinerary'], theme)
+            display_itinerary(st.session_state["generated_itinerary"], theme)
             itinerary_name = st.text_input("Name your itinerary", placeholder="e.g., Paris Adventure")
             is_public = st.checkbox("Make this itinerary public (visible to others)", value=False)
             if st.button("Save Itinerary", key="save_itinerary_gen"):
@@ -427,18 +491,18 @@ else:
                     # Ensure num_people is preserved when saving (fixes the None display)
                     itinerary = Itinerary(
                         name=itinerary_name,
-                        content=st.session_state['generated_itinerary'],
-                        destination=st.session_state['itinerary_details']['destination'],
-                        duration=st.session_state['itinerary_details']['duration'],
-                        budget=st.session_state['itinerary_details']['budget'],
-                        preferences=st.session_state['itinerary_details']['preferences'],
-                        user_name=st.session_state['itinerary_details']['user_name'],
+                        content=st.session_state["generated_itinerary"],
+                        destination=st.session_state["itinerary_details"]["destination"],
+                        duration=st.session_state["itinerary_details"]["duration"],
+                        budget=st.session_state["itinerary_details"]["budget"],
+                        preferences=st.session_state["itinerary_details"]["preferences"],
+                        user_name=st.session_state["itinerary_details"]["user_name"],
                         is_public=is_public,
-                        num_people=st.session_state['itinerary_details'].get('num_people', 1)
+                        num_people=st.session_state["itinerary_details"].get("num_people", 1),
                     )
                     save_itinerary(itinerary, user_id)
-                    del st.session_state['generated_itinerary']
-                    del st.session_state['itinerary_details']
+                    del st.session_state["generated_itinerary"]
+                    del st.session_state["itinerary_details"]
                     st.success("Itinerary saved!")
                     st.balloons()
                 else:
@@ -463,8 +527,9 @@ else:
                     st.subheader(f"📍 {selected_it.name}")
                     st.markdown("---")
                     # Animated header
-                    card_bg = 'linear-gradient(135deg, #1e1e1e 0%, #2c2c2c 100%)'
-                    st.markdown(f"""
+                    card_bg = "linear-gradient(135deg, #1e1e1e 0%, #2c2c2c 100%)"
+                    st.markdown(
+                        f"""
                     <style>
                     @keyframes bounceIn {{
                         0% {{ opacity: 0; transform: scale(0.3); }}
@@ -494,14 +559,17 @@ else:
                         <p style="margin: 10px 0; font-size: 1.2em;">📅 {selected_it.duration} Days | 💰 {selected_it.budget}</p>
                         <p style="margin: 5px 0;">🎯 {selected_it.preferences or 'Custom Trip'}</p>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """,
+                        unsafe_allow_html=True,
+                    )
                     st.markdown("---")
                     display_itinerary(selected_it.content, theme)
 
                     # Chat animations
-                    chat_bg = '#2c2c2c'
-                    chat_border = '#555'
-                    st.markdown(f"""
+                    chat_bg = "#2c2c2c"
+                    chat_border = "#555"
+                    st.markdown(
+                        f"""
                     <style>
                     @keyframes fadeInUp {{
                         from {{ opacity: 0; transform: translateY(20px); }}
@@ -517,7 +585,9 @@ else:
                         box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
                     }}
                     </style>
-                    """, unsafe_allow_html=True)
+                    """,
+                        unsafe_allow_html=True,
+                    )
 
                 with col2:
                     st.markdown("**Details:**")
@@ -525,14 +595,19 @@ else:
                     st.write(f"Duration: {selected_it.duration} days")
                     st.write(f"Budget: {selected_it.budget}")
                     # Avoid showing 'None' by providing a sensible default display
-                    people_display = selected_it.num_people if (selected_it.num_people is not None) else '1'
+                    people_display = selected_it.num_people if (selected_it.num_people is not None) else "1"
                     st.write(f"Number of People: {people_display}")
                     st.write(f"Preferences: {selected_it.preferences}")
 
                     # Image gallery: destination-specific photos (from Wikimedia/Pexels fallbacks)
                     img_urls = get_city_images(selected_it.destination, n=3)
                     st.markdown("**Photos:**")
-                    carousel_html = render_carousel(img_urls, captions=[selected_it.destination, f"{selected_it.destination} - view", f"{selected_it.destination} - landmarks"], uid=f"my_{selected_it.id}", height=260)
+                    carousel_html = render_carousel(
+                        img_urls,
+                        captions=[selected_it.destination, f"{selected_it.destination} - view", f"{selected_it.destination} - landmarks"],
+                        uid=f"my_{selected_it.id}",
+                        height=260,
+                    )
                     components.html(carousel_html, height=280)
 
                     # Flight search UI (My Itineraries)
@@ -545,20 +620,21 @@ else:
                             template="""You are a helpful travel assistant. Provide the top 3 flight options from {origin} to {destination}. For each option give: airline, approximate price, total duration, number of stops, and a short note about convenience (best times to fly or layovers). Provide prices in INR if possible and include suggested search terms to use on flight booking sites.
 
 Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3) ...
-"""
+""",
                         )
                         flight_chain = flight_template | model
                         with st.spinner("Looking up best flight options (using the assistant)..."):
-                            flight_resp = flight_chain.invoke({'origin': origin, 'destination': selected_it.destination}).content.strip()
+                            flight_resp = flight_chain.invoke({"origin": origin, "destination": selected_it.destination})
+                            flight_resp_text = flight_resp.strip() if isinstance(flight_resp, str) else str(flight_resp)
                         st.markdown("**Best Flights (estimated)**")
-                        st.info(flight_resp)
+                        st.info(flight_resp_text)
 
                 st.divider()
                 st.subheader("💬 Chat with Your Itinerary")
                 chat_history = get_chat_history(selected_it.id)
                 for msg in chat_history:
-                    with st.chat_message(msg['role']):
-                        st.write(msg['content'])
+                    with st.chat_message(msg["role"]):
+                        st.write(msg["content"])
 
                 if prompt := st.chat_input("Ask about your itinerary..."):
                     with st.chat_message("user"):
@@ -567,7 +643,9 @@ Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3)
 
                     # Get updated history
                     chat_history = get_chat_history(selected_it.id)
-                    history_text = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in chat_history[:-1]])  # Exclude the latest user message
+                    history_text = "\n".join(
+                        [f"{msg['role'].capitalize()}: {msg['content']}" for msg in chat_history[:-1]]
+                    )  # Exclude the latest user message
 
                     # AI Response
                     chat_template = PromptTemplate(
@@ -584,18 +662,17 @@ Conversation History:
 
 User: {question}
 
-Assistant:"""
+Assistant:""",
                     )
                     chat_chain = chat_template | model
-                    response = chat_chain.invoke({
-                        'itinerary': selected_it.content,
-                        'history': history_text,
-                        'question': prompt
-                    }).content.strip()
+                    chat_resp = chat_chain.invoke(
+                        {"itinerary": selected_it.content, "history": history_text, "question": prompt}
+                    )
+                    response_text = chat_resp.strip() if isinstance(chat_resp, str) else str(chat_resp)
 
                     with st.chat_message("assistant"):
-                        st.write(response)
-                    save_chat_message(selected_it.id, "assistant", response)
+                        st.write(response_text)
+                    save_chat_message(selected_it.id, "assistant", response_text)
                     # (Duplicate display block removed to avoid rendering the itinerary twice)
 
         with tab2:
@@ -612,14 +689,17 @@ Assistant:"""
                 with col1p:
                     st.subheader(f"📍 {selected_pub.name}")
                     st.markdown("---")
-                    card_bg = 'linear-gradient(135deg, #1e1e1e 0%, #2c2c2c 100%)'
-                    st.markdown(f"""
+                    card_bg = "linear-gradient(135deg, #1e1e1e 0%, #2c2c2c 100%)"
+                    st.markdown(
+                        f"""
                     <div class="animated-card" style="background: {card_bg}; padding: 24px; border-radius: 16px; color: white; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin: 20px 0; backdrop-filter: blur(10px); border: 1px solid #555;">
                         <h2 style="margin: 0; font-size: 2em; font-weight: 700;">🌍 {selected_pub.destination}</h2>
                         <p style="margin: 10px 0; font-size: 1.2em;">📅 {selected_pub.duration} Days | 💰 {selected_pub.budget}</p>
                         <p style="margin: 5px 0;">🎯 {selected_pub.preferences or 'Custom Trip'}</p>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """,
+                        unsafe_allow_html=True,
+                    )
                     st.markdown("---")
                     display_itinerary(selected_pub.content, theme)
 
@@ -628,7 +708,7 @@ Assistant:"""
                     st.write(f"Destination: {selected_pub.destination}")
                     st.write(f"Duration: {selected_pub.duration} days")
                     st.write(f"Budget: {selected_pub.budget}")
-                    people_display_pub = selected_pub.num_people if (selected_pub.num_people is not None) else '1'
+                    people_display_pub = selected_pub.num_people if (selected_pub.num_people is not None) else "1"
                     st.write(f"Number of People: {people_display_pub}")
                     st.write(f"Preferences: {selected_pub.preferences}")
                     st.write(f"Shared by: {selected_pub.user_name}")
@@ -636,7 +716,12 @@ Assistant:"""
                     # Destination-specific images
                     img_urls_pub = get_city_images(selected_pub.destination, n=3)
                     st.markdown("**Photos:**")
-                    carousel_html_pub = render_carousel(img_urls_pub, captions=[selected_pub.destination, f"{selected_pub.destination} - view", f"{selected_pub.destination} - landmarks"], uid=f"pub_{selected_pub.id}", height=260)
+                    carousel_html_pub = render_carousel(
+                        img_urls_pub,
+                        captions=[selected_pub.destination, f"{selected_pub.destination} - view", f"{selected_pub.destination} - landmarks"],
+                        uid=f"pub_{selected_pub.id}",
+                        height=260,
+                    )
                     components.html(carousel_html_pub, height=280)
 
                     # Flight search UI (Public Itineraries)
@@ -649,13 +734,14 @@ Assistant:"""
                             template="""You are a helpful travel assistant. Provide the top 3 flight options from {origin} to {destination}. For each option give: airline, approximate price, total duration, number of stops, and a short note about convenience (best times to fly or layovers). Provide prices in INR if possible and include suggested search terms to use on flight booking sites.
 
 Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3) ...
-"""
+""",
                         )
                         flight_chain = flight_template | model
                         with st.spinner("Looking up best flight options (using the assistant)..."):
-                            flight_resp = flight_chain.invoke({'origin': origin, 'destination': selected_pub.destination}).content.strip()
+                            flight_resp = flight_chain.invoke({"origin": origin, "destination": selected_pub.destination})
+                            flight_resp_text = flight_resp.strip() if isinstance(flight_resp, str) else str(flight_resp)
                         st.markdown("**Best Flights (estimated)**")
-                        st.info(flight_resp)
+                        st.info(flight_resp_text)
 
                     # Save a public itinerary copy to the current user's account
                     st.markdown("**Save a copy to your account:**")
@@ -669,9 +755,9 @@ Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3)
                                 duration=selected_pub.duration,
                                 budget=selected_pub.budget,
                                 preferences=selected_pub.preferences,
-                                user_name=st.session_state.get('username', 'Anonymous'),
+                                user_name=st.session_state.get("username", "Anonymous"),
                                 is_public=False,
-                                num_people=selected_pub.num_people
+                                num_people=selected_pub.num_people,
                             )
                             save_itinerary(private_itinerary, user_id)
                             st.success("Itinerary saved to your private collection! You can now chat with it in 'My Itineraries'.")
@@ -681,4 +767,3 @@ Output format:\n1) Airline — Price — Duration — Stops — Note\n2) ...\n3)
                             st.error("Please enter a name for your copy.")
 
 st.caption("🚀 Powered by AI | Built with Streamlit and LangChain")
-
