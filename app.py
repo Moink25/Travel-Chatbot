@@ -256,7 +256,7 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
 # Use Mistral Instruct model (recommended)
 model = HuggingFaceEndpoint(
     repo_id="mistralai/Mistral-7B-Instruct-v0.3",
-    task="text-generation",
+    task="conversational",
     max_new_tokens=700,
     temperature=0.7,
 )
