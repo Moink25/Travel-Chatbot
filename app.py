@@ -233,10 +233,10 @@ def render_carousel(img_urls, captions=None, uid=None, height=320):
 # -----------------------
 
 model = HuggingFaceEndpoint(
-    repo_id="mistralai/Mistral-7B-Instruct-v0.3",
-    task="conversational",  # must be 'conversational' for together provider
+    repo_id="Qwen/Qwen2.5-7B-Instruct",
+    task="text-generation",
     max_new_tokens=700,
-    temperature=0.7,
+    temperature=0.7
 )
 
 # Main itinerary ChatPrompt: system + user message (user message contains placeholders)
